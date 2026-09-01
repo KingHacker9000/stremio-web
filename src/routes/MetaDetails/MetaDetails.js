@@ -13,6 +13,7 @@ const StreamsList = require('./StreamsList');
 const VideosList = require('./VideosList');
 const useMetaDetails = require('./useMetaDetails');
 const useSeason = require('./useSeason');
+const SenseMoreLikeThis = require('./SenseMoreLikeThis');
 const styles = require('./styles');
 
 const GAMEPAD_HANDLER_ID = 'metadetails';
@@ -194,6 +195,10 @@ const MetaDetails = () => {
                                             ratingInfo={metaDetails.ratingInfo}
                                         />
                                     </React.Fragment>
+                }
+                {
+                    metaDetails.metaItem !== null && metaDetails.metaItem.content.type === 'Ready' ?
+                        <SenseMoreLikeThis metaId={metaDetails.metaItem.content.content.id} /> : null
                 }
                 <div className={styles['spacing']} />
                 {

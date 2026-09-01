@@ -3,6 +3,7 @@
 const React = require('react');
 const { useCore } = require('stremio/core');
 const { useModelState, useCoreSuspender } = require('stremio/common');
+const SenseHistory = require('stremio/services/SenseHistory');
 
 const map = (player) => ({
     ...player,
@@ -131,13 +132,9 @@ const usePlayer = (urlParams) => {
     }, []);
 
     const ended = React.useCallback(() => {
-        core.transport.dispatch({
-            action: 'Player',
-            args: {
-                action: 'Ended'
-            }
-        }, 'player');
-    }, []);
+        if (typeof urlParams.id === 'string') SenseHistory.record(urlParams.id, 'completed');
+        core.transport.dispatch({ action: 'Player', args: { action: 'Ended' } }, 'player');
+    }, [urlParams.id]);
     const pausedChanged = React.useCallback((paused) => {
         core.transport.dispatch({
             action: 'Player',

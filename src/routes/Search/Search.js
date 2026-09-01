@@ -8,6 +8,7 @@ const { default: Icon } = require('@stremio/stremio-icons/react');
 const { withCoreSuspender, getVisibleChildrenRange } = require('stremio/common');
 const { Image, MainNavBars, MetaItem, MetaRow } = require('stremio/components');
 const useSearch = require('./useSearch');
+const SenseSmartSearch = require('./SenseSmartSearch');
 const styles = require('./styles');
 const { useSearchParams } = require('react-router-dom');
 
@@ -49,6 +50,7 @@ const Search = () => {
     return (
         <MainNavBars className={styles['search-container']} route={'search'} query={query}>
             <div ref={scrollContainerRef} className={styles['search-content']} onScroll={onScroll}>
+                {query !== null ? <SenseSmartSearch query={query} /> : null}
                 {
                     query === null ?
                         <div className={classnames(styles['search-hints-wrapper'])}>

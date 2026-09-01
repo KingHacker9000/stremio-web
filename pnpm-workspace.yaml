@@ -2,3 +2,7 @@ minimumReleaseAgeExclude:
   - '@stremio/*'
 
 blockExoticSubdeps: false
+allowBuilds:
+  onnxruntime-node: false
+  protobufjs: false
+  sharp: false

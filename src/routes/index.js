@@ -3,6 +3,7 @@
 const Addons = require('./Addons');
 const Board = require('./Board');
 const Discover = require('./Discover');
+const Downloads = require('./Downloads/Downloads');
 const Library = require('./Library');
 const Calendar = require('./Calendar').default;
 const MetaDetails = require('./MetaDetails');
@@ -16,6 +17,7 @@ module.exports = {
     Addons,
     Board,
     Discover,
+    Downloads,
     Library,
     Calendar,
     MetaDetails,

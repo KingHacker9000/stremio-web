@@ -19,6 +19,8 @@ export default [
         view: 1,
         element: <routes.Library />,
     },
+    { path: '/downloads/play/:downloadId?', view: 1, element: <routes.Downloads /> },
+    { path: '/downloads', view: 1, element: <routes.Downloads /> },
     {
         path: '/calendar/:year?/:month?',
         view: 1,

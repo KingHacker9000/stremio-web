@@ -50,7 +50,8 @@
         "stremio-translations": "github:Stremio/stremio-translations#ac0671c3bf483a21bb94a419ab1ee474293b7c06",
         "url": "0.11.4",
         "use-long-press": "^3.3.0",
-        "workbox-window": "7.4.1"
+        "workbox-window": "7.4.1",
+        "@huggingface/transformers": "3.8.1"
     },
     "devDependencies": {
         "@babel/core": "7.29.0",

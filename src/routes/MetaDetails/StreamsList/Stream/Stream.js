@@ -9,8 +9,15 @@ const { useCore } = require('stremio/core');
 const { useProfile, usePlatform, useToast, useBinaryState } = require('stremio/common');
 const { Button, Image, Popup } = require('stremio/components');
 const { default: useRouteFocused } = require('stremio/common/useRouteFocused');
+const { getSenseDownloadManager } = require('stremio/services/SenseDownloads');
 const StreamPlaceholder = require('./StreamPlaceholder');
 const styles = require('./styles');
+
+function senseHash(value) {
+    let hash = 2166136261;
+    for (let i = 0; i < value.length; i += 1) { hash ^= value.charCodeAt(i); hash = Math.imul(hash, 16777619); }
+    return (hash >>> 0).toString(16);
+}
 
 const Stream = ({ className, videoId, videoReleased, addonName, name, description, thumbnail, progress, deepLinks, ...props }) => {
     const profile = useProfile();
@@ -175,6 +182,20 @@ const Stream = ({ className, videoId, videoReleased, addonName, name, descriptio
         }
     }, [downloadLink]);
 
+
+    const downloadVideo = React.useCallback((event) => {
+        event.preventDefault(); event.stopPropagation(); closeMenu();
+        if (!downloadLink) return;
+        if (!navigator.storage || typeof navigator.storage.getDirectory !== 'function') { copyDownloadLink(event); return; }
+        const manager = getSenseDownloadManager();
+        const downloadId = `${videoId || 'video'}-${senseHash(downloadLink)}`;
+        toast.show({ type: 'success', title: 'Download started', timeout: 2500 });
+        manager.requestPersistence().catch(() => false);
+        manager.download({ id: downloadId, url: downloadLink, name: name || description || addonName || videoId || 'Video', videoId })
+            .then(() => toast.show({ type: 'success', title: 'Download complete', timeout: 4000 }))
+            .catch((error) => { if (error && error.name === 'AbortError') return; toast.show({ type: 'error', title: `Download failed: ${error?.message || error}`, timeout: 6000 }); });
+    }, [downloadLink, videoId, name, description, addonName, copyDownloadLink]);
+
     const copyStreamLink = React.useCallback((event) => {
         event.preventDefault();
         closeMenu();
@@ -263,8 +284,15 @@ const Stream = ({ className, videoId, videoReleased, addonName, name, descriptio
                 }
                 {
                     downloadLink &&
-                        <Button className={styles['context-menu-option-container']} title={t('CTX_DOWNLOAD_VIDEO')} onClick={copyDownloadLink}>
+                        <Button className={styles['context-menu-option-container']} title={t('CTX_DOWNLOAD_VIDEO')} onClick={downloadVideo}>
                             <Icon className={styles['menu-icon']} name={'download'} />
+                            <div className={styles['context-menu-option-label']}>{t('CTX_DOWNLOAD_VIDEO')}</div>
+                        </Button>
+                }
+                {
+                    downloadLink &&
+                        <Button className={styles['context-menu-option-container']} title={t('CTX_COPY_VIDEO_DOWNLOAD_LINK')} onClick={copyDownloadLink}>
+                            <Icon className={styles['menu-icon']} name={'link'} />
                             <div className={styles['context-menu-option-label']}>{t('CTX_COPY_VIDEO_DOWNLOAD_LINK')}</div>
                         </Button>
                 }
