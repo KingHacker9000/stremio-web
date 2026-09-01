@@ -41,6 +41,36 @@ jobs:
           PY
       - name: Apply Sense patch
         run: python .sense/apply.py .
+      - name: Localize Sense Downloads UI
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('src/routes/Downloads/Downloads.js')
+          s = p.read_text()
+          s = s.replace("const React = require('react');\n", "const React = require('react');\nconst { useTranslation } = require('react-i18next');\n", 1)
+          s = s.replace("    const navigate = useNavigate();\n    const [url, setUrl]", "    const navigate = useNavigate();\n    const { t } = useTranslation();\n    const [url, setUrl]", 1)
+          marker = "const Downloads = () => {\n    const { downloadId } = useParams();\n    const navigate = useNavigate();\n"
+          replacement = marker + "    const { t } = useTranslation();\n"
+          if marker not in s:
+              raise SystemExit('Downloads hook anchor changed')
+          s = s.replace(marker, replacement, 1)
+          replacements = {
+              '>Back to Downloads</Button>': ">{t('sense_downloads_back', { defaultValue: 'Back to Downloads' })}</Button>",
+              '>Opening offline media…</div>': ">{t('sense_downloads_opening', { defaultValue: 'Opening offline media…' })}</div>",
+              '>Downloads</div>': ">{t('sense_downloads_title', { defaultValue: 'Downloads' })}</div>",
+              '>Saved locally on this device. Nothing is uploaded to Stremio Sense.</div>': ">{t('sense_downloads_privacy', { defaultValue: 'Saved locally on this device. Nothing is uploaded to Stremio Sense.' })}</div>",
+              '>No offline media yet. Open a stream menu and choose Download video.</div>': ">{t('sense_downloads_empty', { defaultValue: 'No offline media yet. Open a stream menu and choose Download video.' })}</div>",
+              '>Play Offline</Button>': ">{t('sense_downloads_play_offline', { defaultValue: 'Play Offline' })}</Button>",
+              '>Pause</Button>': ">{t('sense_downloads_pause', { defaultValue: 'Pause' })}</Button>",
+              '>Resume</Button>': ">{t('sense_downloads_resume', { defaultValue: 'Resume' })}</Button>",
+              '>Delete</Button>': ">{t('sense_downloads_delete', { defaultValue: 'Delete' })}</Button>",
+          }
+          for old, new in replacements.items():
+              if old not in s:
+                  raise SystemExit(f'i18n anchor changed: {old}')
+              s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
       - name: Declare pnpm 11 build-script policy
         run: |
           cat >> pnpm-workspace.yaml <<'EOF'
