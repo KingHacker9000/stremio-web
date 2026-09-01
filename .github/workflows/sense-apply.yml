@@ -58,7 +58,7 @@ jobs:
           corepack prepare pnpm@11 --activate
           pnpm install --no-frozen-lockfile
       - name: Test
-        run: pnpm test -- --runInBand
+        run: pnpm exec jest --runInBand
       - name: Build
         run: pnpm build
       - name: Commit validated integration
