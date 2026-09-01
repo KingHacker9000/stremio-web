@@ -41,6 +41,15 @@ jobs:
           PY
       - name: Apply Sense patch
         run: python .sense/apply.py .
+      - name: Declare pnpm 11 build-script policy
+        run: |
+          cat >> pnpm-workspace.yaml <<'EOF'
+          
+          allowBuilds:
+            onnxruntime-node: false
+            protobufjs: false
+            sharp: false
+          EOF
       - name: Remove patch kit
         run: rm -rf .sense .github/workflows/sense-apply.yml
       - name: Install dependencies
