@@ -26,17 +26,12 @@ jobs:
                   raise SystemExit('MetaDetails import anchor changed')
               s = s.replace(old_import, new_import, 1)
           anchor = "                <div className={styles['spacing']} />\n"
-          row = """                {
-                    metaDetails.metaItem !== null && metaDetails.metaItem.content.type === 'Ready' ?
-                        <SenseMoreLikeThis metaId={metaDetails.metaItem.content.content.id} /> : null
-                }
-"""
+          row = "                {\n                    metaDetails.metaItem !== null && metaDetails.metaItem.content.type === 'Ready' ?\n                        <SenseMoreLikeThis metaId={metaDetails.metaItem.content.content.id} /> : null\n                }\n"
           if row not in s:
               if anchor not in s:
                   raise SystemExit('MetaDetails row anchor changed')
               s = s.replace(anchor, row + anchor, 1)
           p.write_text(s)
-
           q = Path('.sense/apply.py')
           t = q.read_text()
           call = "    patch(root/'src/routes/MetaDetails/MetaDetails.js',meta)\n"
