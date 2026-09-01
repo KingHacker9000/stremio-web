@@ -13,6 +13,24 @@ jobs:
         with: { fetch-depth: 0 }
       - uses: actions/setup-node@v4
         with: { node-version: '22' }
+      - name: Repair current MetaDetails anchor
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          p = Path('.sense/apply.py')
+          s = p.read_text()
+          replacement = '''    def meta(s):
+              s=repl(s,"const useSeason = require('./useSeason');\\n","const useSeason = require('./useSeason');\\nconst SenseMoreLikeThis = require('./SenseMoreLikeThis');\\n",'meta import')
+              anchor="                <div className={styles['spacing']} />\\n"
+              row="""                {\n                    metaDetails.metaItem !== null && metaDetails.metaItem.content.type === 'Ready' ?\n                        <SenseMoreLikeThis metaId={metaDetails.metaItem.content.content.id} /> : null\n                }\n"""
+              return repl(s,anchor,row+anchor,'meta row')
+          patch(root/'src/routes/MetaDetails/MetaDetails.js',meta)'''
+          s, n = re.subn(r"    def meta\(s\):.*?    patch\(root/'src/routes/MetaDetails/MetaDetails\.js',meta\)", replacement, s, count=1, flags=re.S)
+          if n != 1:
+              raise SystemExit('could not repair MetaDetails patcher')
+          p.write_text(s)
+          PY
       - name: Apply Sense patch
         run: python .sense/apply.py .
       - name: Remove patch kit
