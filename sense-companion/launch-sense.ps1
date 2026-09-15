@@ -6,13 +6,23 @@ param(
     [string]$StremioExe,
 
     [Parameter(Mandatory = $false)]
-    [string]$AgentExe = (Join-Path $PSScriptRoot 'stremio-sense-agent.exe'),
+    [string]$AgentExe,
 
     [Parameter(Mandatory = $false)]
     [string]$DownloadDir
 )
 
 $ErrorActionPreference = 'Stop'
+
+# Parameter default expressions are evaluated before $PSScriptRoot is reliably
+# available on Windows PowerShell 5.1. Resolve paths only after param binding.
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+if (-not $ScriptDir) {
+    $ScriptDir = (Get-Location).Path
+}
+if (-not $AgentExe) {
+    $AgentExe = Join-Path $ScriptDir 'stremio-sense-agent.exe'
+}
 
 function Find-StremioExe {
     param([string]$ExplicitPath)
