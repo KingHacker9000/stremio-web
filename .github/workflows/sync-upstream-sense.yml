@@ -1,6 +1,10 @@
 name: Sync Sense With Upstream Stremio Web
 
 on:
+  push:
+    branches: [sense-mvp]
+    paths:
+      - '.github/workflows/sync-upstream-sense.yml'
   schedule:
     - cron: '23 8 * * *'
   workflow_dispatch:
