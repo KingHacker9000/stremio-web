@@ -182,19 +182,35 @@ const Stream = ({ className, videoId, videoReleased, addonName, name, descriptio
         }
     }, [downloadLink]);
 
-
     const downloadVideo = React.useCallback((event) => {
-        event.preventDefault(); event.stopPropagation(); closeMenu();
+        event.preventDefault();
+        event.stopPropagation();
+        closeMenu();
         if (!downloadLink) return;
-        if (!navigator.storage || typeof navigator.storage.getDirectory !== 'function') { copyDownloadLink(event); return; }
         const manager = getSenseDownloadManager();
         const downloadId = `${videoId || 'video'}-${senseHash(downloadLink)}`;
         toast.show({ type: 'success', title: 'Download started', timeout: 2500 });
         manager.requestPersistence().catch(() => false);
-        manager.download({ id: downloadId, url: downloadLink, name: name || description || addonName || videoId || 'Video', videoId })
-            .then(() => toast.show({ type: 'success', title: 'Download complete', timeout: 4000 }))
-            .catch((error) => { if (error && error.name === 'AbortError') return; toast.show({ type: 'error', title: `Download failed: ${error?.message || error}`, timeout: 6000 }); });
-    }, [downloadLink, videoId, name, description, addonName, copyDownloadLink]);
+        manager.download({
+            id: downloadId,
+            url: downloadLink,
+            name: name || description || addonName || videoId || 'Video',
+            videoId,
+        }).then((result) => {
+            toast.show({
+                type: 'success',
+                title: result && result.background ? 'Download queued in Sense companion' : 'Download complete',
+                timeout: 4000,
+            });
+        }).catch((error) => {
+            if (error && error.name === 'AbortError') return;
+            toast.show({
+                type: 'error',
+                title: `Download failed: ${error?.message || error}`,
+                timeout: 6000,
+            });
+        });
+    }, [downloadLink, videoId, name, description, addonName]);
 
     const copyStreamLink = React.useCallback((event) => {
         event.preventDefault();
