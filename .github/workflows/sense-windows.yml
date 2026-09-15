@@ -55,26 +55,20 @@ jobs:
         shell: pwsh
         run: pyinstaller --clean --onefile --name stremio-sense-agent sense-companion/sense_agent.py
 
-      - name: Smoke test Windows launcher
+      - name: Smoke test Windows launcher default path
         shell: powershell
         run: |
-          $agent = Resolve-Path 'dist\stremio-sense-agent.exe'
-          $proc = Start-Process -FilePath $agent -PassThru -WindowStyle Hidden
+          $agent = (Resolve-Path 'dist\stremio-sense-agent.exe').Path
+          $stremioStub = (Get-Command where.exe).Source
+          Get-Process -Name 'stremio-sense-agent' -ErrorAction SilentlyContinue | Stop-Process -Force
           try {
-            $ready = $false
-            for ($i = 0; $i -lt 40; $i++) {
-              try {
-                $health = Invoke-RestMethod -Uri 'http://127.0.0.1:11471/v1/health' -TimeoutSec 1
-                if ($health.ok) { $ready = $true; break }
-              }
-              catch {}
-              Start-Sleep -Milliseconds 250
-            }
-            if (-not $ready) { throw 'Companion failed to become ready during launcher smoke test.' }
-            & 'sense-companion\launch-sense.ps1' -AgentExe $agent -StremioExe $env:ComSpec
+            # Exercise the exact default path users run: no DownloadDir and no pre-started agent.
+            & 'sense-companion\launch-sense.ps1' -AgentExe $agent -StremioExe $stremioStub
+            $health = Invoke-RestMethod -Uri 'http://127.0.0.1:11471/v1/health' -TimeoutSec 2
+            if (-not $health.ok) { throw 'Launcher returned but companion health check failed.' }
           }
           finally {
-            if ($proc -and -not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
+            Get-Process -Name 'stremio-sense-agent' -ErrorAction SilentlyContinue | Stop-Process -Force
           }
 
       - name: Stage self-contained Windows bundle
