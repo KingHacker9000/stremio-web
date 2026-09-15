@@ -1,0 +1,91 @@
+name: Build Stremio Sense Windows
+
+on:
+  push:
+    branches: [sense-mvp]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sense-windows-latest
+  cancel-in-progress: true
+
+jobs:
+  build-test-package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+          run_install: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Web dependencies
+        shell: pwsh
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Test Stremio Web
+        shell: pwsh
+        run: pnpm exec jest --runInBand
+
+      - name: Build Sense Web
+        shell: pwsh
+        run: pnpm build
+
+      - name: Install companion test/build dependencies
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check pytest pyinstaller
+
+      - name: Test native companion
+        shell: pwsh
+        run: python -m pytest -q sense-companion/test_agent.py
+
+      - name: Build companion executable
+        shell: pwsh
+        run: pyinstaller --clean --onefile --name stremio-sense-agent sense-companion/sense_agent.py
+
+      - name: Stage self-contained Windows bundle
+        shell: pwsh
+        run: |
+          $bundle = 'dist\stremio-sense-windows'
+          New-Item -ItemType Directory -Force -Path $bundle | Out-Null
+          New-Item -ItemType Directory -Force -Path "$bundle\web-ui" | Out-Null
+          Copy-Item 'dist\stremio-sense-agent.exe' "$bundle\stremio-sense-agent.exe"
+          Copy-Item 'sense-companion\launch-sense.ps1' "$bundle\launch-sense.ps1"
+          Copy-Item 'sense-companion\README.md' "$bundle\README.md"
+          Copy-Item 'build\*' "$bundle\web-ui" -Recurse -Force
+          Compress-Archive -Path "$bundle\*" -DestinationPath 'dist\stremio-sense-windows.zip' -Force
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: stremio-sense-windows
+          path: dist/stremio-sense-windows.zip
+          if-no-files-found: error
+
+      - name: Publish stable latest release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $tag = 'sense-windows-latest'
+          $zip = 'dist\stremio-sense-windows.zip'
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $zip --clobber
+            gh release edit $tag --title 'Stremio Sense Windows - Latest' --notes "Latest validated Sense Windows bundle from sense-mvp commit $env:GITHUB_SHA. Official Stremio remains unmodified and continues using its own updater."
+          }
+          else {
+            gh release create $tag $zip --target $env:GITHUB_SHA --title 'Stremio Sense Windows - Latest' --notes "Latest validated Sense Windows bundle from sense-mvp commit $env:GITHUB_SHA. Official Stremio remains unmodified and continues using its own updater."
+          }
