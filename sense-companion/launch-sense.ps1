@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $false)]
-    [string]$WebUiUrl = $(if ($env:SENSE_WEBUI_URL) { $env:SENSE_WEBUI_URL } else { 'http://127.0.0.1:11471/ui/' }),
+    [string]$WebUiUrl = $(if ($env:SENSE_WEBUI_URL) { $env:SENSE_WEBUI_URL } else { 'http://127.0.0.1:11471/ui/#/?streamingServerUrl=http%3A%2F%2F127.0.0.1%3A11470' }),
 
     [Parameter(Mandatory = $false)]
     [string]$StremioExe,
