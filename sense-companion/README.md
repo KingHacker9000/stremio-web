@@ -4,6 +4,7 @@ Stremio Sense keeps the **official Stremio Windows installation** intact and add
 
 ## What the bundle contains
 
+- `Stremio Sense.cmd` — double-click launcher
 - `stremio-sense-agent.exe` — loopback-only companion on `127.0.0.1:11471`
 - `launch-sense.ps1` — starts the companion and then launches the installed official `stremio.exe` with the bundled Sense Web UI
 - `web-ui/` — the tested Sense Web build
@@ -14,7 +15,9 @@ The official Stremio updater remains responsible for `stremio.exe`, the player, 
 
 1. Install/update official Stremio normally.
 2. Extract the Sense Windows ZIP somewhere permanent.
-3. Right-click `launch-sense.ps1` and choose **Run with PowerShell**, or run:
+3. Double-click **`Stremio Sense.cmd`**.
+
+Advanced/manual launch:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\launch-sense.ps1
@@ -42,7 +45,7 @@ Choose another directory when launching:
 .\launch-sense.ps1 -DownloadDir 'D:\Stremio Downloads'
 ```
 
-Downloads are ordinary files on disk. The companion persists metadata, supports HTTP Range resume, continues downloads after the Stremio window closes, and provides local Range playback to the Downloads screen.
+Downloads are ordinary files on disk. The companion persists metadata, supports HTTP Range resume, and provides local Range playback to the Downloads screen. The companion process is independent of the Stremio window; an active transfer can continue while its source URL remains reachable.
 
 If the companion is not available and Sense Web is opened separately in a compatible browser, the Web download manager falls back to OPFS browser storage.
 
@@ -52,7 +55,7 @@ There are deliberately separate update paths:
 
 - **Official Stremio:** unchanged; use Stremio's normal updater.
 - **Sense Web + companion:** download the newest `stremio-sense-windows.zip` release and replace this Sense folder.
-- **Upstream Web compatibility:** the Sense branch checks Stremio Web `development` daily. Clean upstream changes are tested/built before being merged. Conflicting upstream changes are not applied; an issue is opened and the last validated Sense build remains intact.
+- **Upstream Web compatibility:** the Sense branch checks Stremio Web `development` daily. Clean upstream changes are tested/built before being merged. Conflicting upstream changes are not applied; the Actions run records the conflicting files and the last validated Sense build remains intact.
 
 ## Security
 
