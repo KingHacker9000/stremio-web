@@ -11,7 +11,6 @@ on:
 
 permissions:
   contents: write
-  issues: write
 
 concurrency:
   group: sense-upstream-sync
@@ -62,22 +61,24 @@ jobs:
             echo "ok=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Record incompatible upstream update
+      - name: Report incompatible upstream update safely
         if: steps.sync.outputs.needed == 'true' && steps.merge.outputs.ok == 'false'
-        env:
-          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          title="Sense upstream sync blocked"
           upstream_sha="$(git rev-parse upstream/development)"
-          existing="$(gh issue list --state open --search \"$title in:title\" --json number --jq '.[0].number // empty')"
-          body=$(printf 'Automatic Stremio Web update was not applied because it conflicts with Sense changes.\n\nUpstream development: `%s`\n\nConflicting files:\n```\n%s\n```\n\nThe currently validated Sense branch was left untouched.' "$upstream_sha" "$(cat /tmp/sense-conflicts.txt)")
-          if [ -n "$existing" ]; then
-            gh issue comment "$existing" --body "$body"
-          else
-            gh issue create --title "$title" --body "$body"
-          fi
-          echo "Upstream update conflicts with Sense; keeping current validated branch."
+          conflicts="$(cat /tmp/sense-conflicts.txt)"
+          echo "::warning title=Sense upstream sync blocked::Upstream $upstream_sha conflicts with Sense. Current validated Sense branch remains untouched."
+          {
+            echo "## Sense upstream sync blocked"
+            echo
+            echo "The automatic update was **not** applied because latest Stremio Web conflicts with Sense changes. The currently validated Sense build remains untouched."
+            echo
+            echo "Upstream development: \`$upstream_sha\`"
+            echo
+            echo '```text'
+            echo "$conflicts"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/setup-node@v4
         if: steps.sync.outputs.needed == 'true' && steps.merge.outputs.ok == 'true'
