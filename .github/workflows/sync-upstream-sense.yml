@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 concurrency:
   group: sense-upstream-sync
@@ -42,52 +43,67 @@ jobs:
             echo "needed=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Capture Sense-only patch
+      - name: Attempt conflict-safe upstream merge
         if: steps.sync.outputs.needed == 'true'
-        shell: bash
-        run: |
-          base="$(git merge-base HEAD upstream/development)"
-          echo "Sense merge base: $base"
-          git diff --binary "$base"..HEAD > /tmp/sense.patch
-          test -s /tmp/sense.patch
-
-      - name: Rebuild branch from clean upstream
-        if: steps.sync.outputs.needed == 'true'
+        id: merge
         shell: bash
         run: |
           git config user.name "stremio-sense-bot"
           git config user.email "68105674+KingHacker9000@users.noreply.github.com"
-          git reset --hard upstream/development
-          git clean -fdx
-          git apply --3way /tmp/sense.patch
+          set +e
+          git merge --no-commit --no-ff upstream/development
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            git diff --name-only --diff-filter=U | tee /tmp/sense-conflicts.txt
+            git merge --abort
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Record incompatible upstream update
+        if: steps.sync.outputs.needed == 'true' && steps.merge.outputs.ok == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          title="Sense upstream sync blocked"
+          upstream_sha="$(git rev-parse upstream/development)"
+          existing="$(gh issue list --state open --search \"$title in:title\" --json number --jq '.[0].number // empty')"
+          body=$(printf 'Automatic Stremio Web update was not applied because it conflicts with Sense changes.\n\nUpstream development: `%s`\n\nConflicting files:\n```\n%s\n```\n\nThe currently validated Sense branch was left untouched.' "$upstream_sha" "$(cat /tmp/sense-conflicts.txt)")
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
+          echo "Upstream update conflicts with Sense; keeping current validated branch."
 
       - uses: actions/setup-node@v4
-        if: steps.sync.outputs.needed == 'true'
+        if: steps.sync.outputs.needed == 'true' && steps.merge.outputs.ok == 'true'
         with:
           node-version: '22'
 
       - uses: pnpm/action-setup@v4
-        if: steps.sync.outputs.needed == 'true'
+        if: steps.sync.outputs.needed == 'true' && steps.merge.outputs.ok == 'true'
         with:
           version: 11
           run_install: false
 
-      - name: Install dependencies
-        if: steps.sync.outputs.needed == 'true'
+      - name: Install merged dependencies
+        if: steps.sync.outputs.needed == 'true' && steps.merge.outputs.ok == 'true'
         run: pnpm install --no-frozen-lockfile
 
-      - name: Run tests on regenerated Sense tree
-        if: steps.sync.outputs.needed == 'true'
+      - name: Test merged tree
+        if: steps.sync.outputs.needed == 'true' && steps.merge.outputs.ok == 'true'
         run: pnpm exec jest --runInBand
 
-      - name: Production build regenerated Sense tree
-        if: steps.sync.outputs.needed == 'true'
+      - name: Build merged tree
+        if: steps.sync.outputs.needed == 'true' && steps.merge.outputs.ok == 'true'
         run: pnpm build
 
-      - name: Publish validated regenerated Sense branch
-        if: steps.sync.outputs.needed == 'true'
-        shell: bash
+      - name: Publish validated upstream update
+        if: steps.sync.outputs.needed == 'true' && steps.merge.outputs.ok == 'true'
         run: |
-          git add -A
-          git commit -m "chore: regenerate Sense on latest Stremio Web development"
-          git push --force-with-lease origin HEAD:sense-mvp
+          git commit -m "chore: sync latest Stremio Web development"
+          git push origin HEAD:sense-mvp
