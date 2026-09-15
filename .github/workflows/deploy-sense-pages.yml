@@ -32,6 +32,12 @@ jobs:
         run: pnpm build
       - name: Disable Jekyll
         run: touch build/.nojekyll
+      - name: Upload standalone Web build
+        uses: actions/upload-artifact@v4
+        with:
+          name: stremio-sense-web-build
+          path: build
+          if-no-files-found: error
       - uses: actions/configure-pages@v5
         with:
           enablement: true
