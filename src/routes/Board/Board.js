@@ -8,6 +8,7 @@ const { useStreamingServer, useNotifications, withCoreSuspender, useProfile } = 
 const { ContinueWatchingItem, EventModal, MainNavBars, MetaItem, MetaRow } = require('stremio/components');
 const useBoard = require('./useBoard');
 const useContinueWatchingPreview = require('./useContinueWatchingPreview');
+const SenseTopPicks = require('./SenseTopPicks');
 const styles = require('./styles');
 const { default: StreamingServerWarning } = require('./StreamingServerWarning');
 
@@ -49,6 +50,7 @@ const Board = () => {
                             :
                             null
                     }
+                    <SenseTopPicks continueWatching={continueWatchingPreview.items} />
                     {catalogRows.map(({ catalog, index }) => {
                         switch (catalog.content?.type) {
                             case 'Ready': {
