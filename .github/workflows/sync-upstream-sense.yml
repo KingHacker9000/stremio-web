@@ -42,12 +42,24 @@ jobs:
             echo "needed=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Stage upstream merge without publishing it
+      - name: Capture Sense-only patch
         if: steps.sync.outputs.needed == 'true'
+        shell: bash
+        run: |
+          base="$(git merge-base HEAD upstream/development)"
+          echo "Sense merge base: $base"
+          git diff --binary "$base"..HEAD > /tmp/sense.patch
+          test -s /tmp/sense.patch
+
+      - name: Rebuild branch from clean upstream
+        if: steps.sync.outputs.needed == 'true'
+        shell: bash
         run: |
           git config user.name "stremio-sense-bot"
           git config user.email "68105674+KingHacker9000@users.noreply.github.com"
-          git merge --no-commit --no-ff upstream/development
+          git reset --hard upstream/development
+          git clean -fdx
+          git apply --3way /tmp/sense.patch
 
       - uses: actions/setup-node@v4
         if: steps.sync.outputs.needed == 'true'
@@ -60,20 +72,22 @@ jobs:
           version: 11
           run_install: false
 
-      - name: Install merged dependencies
+      - name: Install dependencies
         if: steps.sync.outputs.needed == 'true'
         run: pnpm install --no-frozen-lockfile
 
-      - name: Run tests on merged tree
+      - name: Run tests on regenerated Sense tree
         if: steps.sync.outputs.needed == 'true'
         run: pnpm exec jest --runInBand
 
-      - name: Production build merged tree
+      - name: Production build regenerated Sense tree
         if: steps.sync.outputs.needed == 'true'
         run: pnpm build
 
-      - name: Publish validated upstream merge
+      - name: Publish validated regenerated Sense branch
         if: steps.sync.outputs.needed == 'true'
+        shell: bash
         run: |
-          git commit -m "chore: sync latest Stremio Web development"
-          git push origin HEAD:sense-mvp
+          git add -A
+          git commit -m "chore: regenerate Sense on latest Stremio Web development"
+          git push --force-with-lease origin HEAD:sense-mvp
