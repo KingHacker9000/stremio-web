@@ -55,20 +55,55 @@ jobs:
         shell: pwsh
         run: pyinstaller --clean --onefile --name stremio-sense-agent sense-companion/sense_agent.py
 
-      - name: Smoke test Windows launcher default path
+      - name: Smoke test exact Windows bundle launch and Stremio discovery
         shell: powershell
         run: |
-          $agent = (Resolve-Path 'dist\stremio-sense-agent.exe').Path
-          $stremioStub = (Get-Command where.exe).Source
+          $stage = Join-Path $env:RUNNER_TEMP 'sense-launch-smoke'
+          $fakeStremio = Join-Path $env:RUNNER_TEMP 'fake-stremio-install'
+          $registryPath = 'HKCU:\Software\SmartCode\Stremio'
+
+          Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath $fakeStremio -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          New-Item -ItemType Directory -Force -Path $fakeStremio | Out-Null
+
+          Copy-Item 'dist\stremio-sense-agent.exe' (Join-Path $stage 'stremio-sense-agent.exe')
+          Copy-Item 'sense-companion\launch-sense.ps1' (Join-Path $stage 'launch-sense.ps1')
+          Copy-Item $env:ComSpec (Join-Path $fakeStremio 'stremio.exe')
+
+          $registryExisted = Test-Path -LiteralPath $registryPath
+          $oldInstallLocation = $null
+          if ($registryExisted) {
+            try {
+              $oldInstallLocation = (Get-ItemProperty -LiteralPath $registryPath -Name InstallLocation -ErrorAction Stop).InstallLocation
+            }
+            catch {}
+          }
+
+          New-Item -Path $registryPath -Force | Out-Null
+          Set-ItemProperty -LiteralPath $registryPath -Name InstallLocation -Value $fakeStremio
           Get-Process -Name 'stremio-sense-agent' -ErrorAction SilentlyContinue | Stop-Process -Force
+
           try {
-            # Exercise the exact default path users run: no DownloadDir and no pre-started agent.
-            & 'sense-companion\launch-sense.ps1' -AgentExe $agent -StremioExe $stremioStub
+            # Match the real user path: no arguments, agent not pre-started, and
+            # Stremio discovered from the registry written by the official installer.
+            & (Join-Path $stage 'launch-sense.ps1')
             $health = Invoke-RestMethod -Uri 'http://127.0.0.1:11471/v1/health' -TimeoutSec 2
             if (-not $health.ok) { throw 'Launcher returned but companion health check failed.' }
           }
           finally {
             Get-Process -Name 'stremio-sense-agent' -ErrorAction SilentlyContinue | Stop-Process -Force
+            if ($registryExisted) {
+              if ($null -ne $oldInstallLocation) {
+                Set-ItemProperty -LiteralPath $registryPath -Name InstallLocation -Value $oldInstallLocation
+              }
+              else {
+                Remove-ItemProperty -LiteralPath $registryPath -Name InstallLocation -ErrorAction SilentlyContinue
+              }
+            }
+            else {
+              Remove-Item -LiteralPath $registryPath -Recurse -Force -ErrorAction SilentlyContinue
+            }
           }
 
       - name: Stage self-contained Windows bundle
