@@ -68,12 +68,12 @@ if (-not (Test-Path -LiteralPath $AgentExe)) {
 }
 
 if (-not (Test-SenseAgent)) {
-    $agentArgs = @()
     if ($DownloadDir) {
-        $agentArgs += @('--download-dir', $DownloadDir)
+        Start-Process -FilePath $AgentExe -ArgumentList @('--download-dir', $DownloadDir) -WindowStyle Hidden
     }
-
-    Start-Process -FilePath $AgentExe -ArgumentList $agentArgs -WindowStyle Hidden
+    else {
+        Start-Process -FilePath $AgentExe -WindowStyle Hidden
+    }
 
     $deadline = [DateTime]::UtcNow.AddSeconds(10)
     while ([DateTime]::UtcNow -lt $deadline) {
