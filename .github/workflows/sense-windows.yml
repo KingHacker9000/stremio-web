@@ -63,6 +63,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path "$bundle\web-ui" | Out-Null
           Copy-Item 'dist\stremio-sense-agent.exe' "$bundle\stremio-sense-agent.exe"
           Copy-Item 'sense-companion\launch-sense.ps1' "$bundle\launch-sense.ps1"
+          Copy-Item 'sense-companion\Stremio Sense.cmd' "$bundle\Stremio Sense.cmd"
           Copy-Item 'sense-companion\README.md' "$bundle\README.md"
           Copy-Item 'build\*' "$bundle\web-ui" -Recurse -Force
           Compress-Archive -Path "$bundle\*" -DestinationPath 'dist\stremio-sense-windows.zip' -Force
