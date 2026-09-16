@@ -8,6 +8,7 @@ import re
 import sys
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from http import HTTPStatus
@@ -15,11 +16,40 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 11471
+DEFAULT_STREMIO_SERVER_URL = "http://127.0.0.1:11470/"
 CHUNK_SIZE = 1024 * 1024
 MEDIA_EXTENSIONS = {".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v", ".ts"}
+
+_PROXY_REQUEST_HEADERS = {
+    "accept",
+    "accept-encoding",
+    "accept-language",
+    "cache-control",
+    "content-type",
+    "if-match",
+    "if-modified-since",
+    "if-none-match",
+    "if-range",
+    "range",
+    "user-agent",
+}
+_PROXY_RESPONSE_HEADERS = {
+    "accept-ranges",
+    "cache-control",
+    "content-disposition",
+    "content-encoding",
+    "content-language",
+    "content-length",
+    "content-range",
+    "content-type",
+    "etag",
+    "expires",
+    "last-modified",
+    "location",
+}
 
 
 def default_download_root() -> Path:
@@ -35,6 +65,11 @@ def default_web_root() -> Path:
         return Path(configured).expanduser()
     base = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
     return base / "web-ui"
+
+
+def default_stremio_server_url() -> str:
+    configured = os.environ.get("SENSE_STREMIO_SERVER_URL")
+    return (configured or DEFAULT_STREMIO_SERVER_URL).rstrip("/") + "/"
 
 
 def safe_id(value: str) -> str:
@@ -155,7 +190,12 @@ class DownloadLibrary:
             self.items[download_id] = item
             self._save()
             stop = threading.Event()
-            thread = threading.Thread(target=self._worker, args=(download_id, stop), daemon=True, name=f"sense-{download_id[:24]}")
+            thread = threading.Thread(
+                target=self._worker,
+                args=(download_id, stop),
+                daemon=True,
+                name=f"sense-{download_id[:24]}",
+            )
             self.jobs[download_id] = (thread, stop)
             thread.start()
             return dict(item)
@@ -212,14 +252,20 @@ class DownloadLibrary:
             headers = {"User-Agent": f"Stremio-Sense/{VERSION}"}
             if existing:
                 headers["Range"] = f"bytes={existing}-"
-            response = urllib.request.urlopen(urllib.request.Request(item["sourceUrl"], headers=headers), timeout=30)
+            response = urllib.request.urlopen(
+                urllib.request.Request(item["sourceUrl"], headers=headers),
+                timeout=30,
+            )
             status = getattr(response, "status", 200)
             if existing and status != HTTPStatus.PARTIAL_CONTENT:
                 response.close()
                 existing = 0
                 path.write_bytes(b"")
                 headers.pop("Range", None)
-                response = urllib.request.urlopen(urllib.request.Request(item["sourceUrl"], headers=headers), timeout=30)
+                response = urllib.request.urlopen(
+                    urllib.request.Request(item["sourceUrl"], headers=headers),
+                    timeout=30,
+                )
 
             total = parse_total(response.headers, existing)
             downloaded = existing
@@ -276,6 +322,10 @@ class SenseRequestHandler(BaseHTTPRequestHandler):
     def web_root(self) -> Path:
         return self.server.web_root  # type: ignore[attr-defined]
 
+    @property
+    def stremio_server_url(self) -> str:
+        return self.server.stremio_server_url  # type: ignore[attr-defined]
+
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"[sense-agent] {self.address_string()} - {fmt % args}")
 
@@ -293,7 +343,7 @@ class SenseRequestHandler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", "*" if "*" in allowed else origin)
             self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Range")
-        self.send_header("Access-Control-Allow-Methods", "GET, HEAD, POST, DELETE, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS")
         self.send_header("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges")
         if self.headers.get("Access-Control-Request-Private-Network") == "true":
             self.send_header("Access-Control-Allow-Private-Network", "true")
@@ -308,11 +358,14 @@ class SenseRequestHandler(BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(data)
 
-    def _read_json(self) -> dict[str, Any]:
-        length = int(self.headers.get("Content-Length", "0"))
-        if length > 1024 * 1024:
+    def _read_body(self, max_bytes: int | None = None) -> bytes:
+        length = int(self.headers.get("Content-Length", "0") or 0)
+        if max_bytes is not None and length > max_bytes:
             raise ValueError("request body too large")
-        raw = self.rfile.read(length) if length else b"{}"
+        return self.rfile.read(length) if length else b""
+
+    def _read_json(self) -> dict[str, Any]:
+        raw = self._read_body(1024 * 1024) or b"{}"
         value = json.loads(raw.decode("utf-8"))
         if not isinstance(value, dict):
             raise ValueError("JSON object required")
@@ -320,6 +373,10 @@ class SenseRequestHandler(BaseHTTPRequestHandler):
 
     def _segments(self) -> list[str]:
         return [urllib.parse.unquote(part) for part in urllib.parse.urlparse(self.path).path.split("/") if part]
+
+    def _is_stremio_proxy(self) -> bool:
+        path = urllib.parse.urlparse(self.path).path
+        return path == "/stremio" or path.startswith("/stremio/")
 
     def do_OPTIONS(self) -> None:
         if not self._origin_allowed():
@@ -330,6 +387,9 @@ class SenseRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_HEAD(self) -> None:
+        if self._is_stremio_proxy():
+            self._proxy_stremio()
+            return
         self.do_GET()
 
     def do_GET(self) -> None:
@@ -340,9 +400,20 @@ class SenseRequestHandler(BaseHTTPRequestHandler):
         if not self._origin_allowed():
             self._json(HTTPStatus.FORBIDDEN, {"error": "origin not allowed"})
             return
+        if self._is_stremio_proxy():
+            self._proxy_stremio()
+            return
         parts = self._segments()
         if parts == ["v1", "health"]:
-            self._json(HTTPStatus.OK, {"ok": True, "name": "stremio-sense-agent", "version": VERSION, "downloadRoot": str(self.library.root), "webRoot": str(self.web_root)})
+            self._json(HTTPStatus.OK, {
+                "ok": True,
+                "name": "stremio-sense-agent",
+                "version": VERSION,
+                "downloadRoot": str(self.library.root),
+                "webRoot": str(self.web_root),
+                "stremioProxy": "/stremio/",
+                "stremioUpstream": self.stremio_server_url,
+            })
             return
         if parts == ["v1", "downloads"]:
             self._json(HTTPStatus.OK, self.library.list())
@@ -355,6 +426,9 @@ class SenseRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         if not self._origin_allowed():
             self._json(HTTPStatus.FORBIDDEN, {"error": "origin not allowed"})
+            return
+        if self._is_stremio_proxy():
+            self._proxy_stremio()
             return
         parts = self._segments()
         try:
@@ -375,9 +449,24 @@ class SenseRequestHandler(BaseHTTPRequestHandler):
             return
         self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
+    def do_PUT(self) -> None:
+        if self._is_stremio_proxy():
+            self._proxy_stremio()
+        else:
+            self._json(HTTPStatus.METHOD_NOT_ALLOWED, {"error": "method not allowed"})
+
+    def do_PATCH(self) -> None:
+        if self._is_stremio_proxy():
+            self._proxy_stremio()
+        else:
+            self._json(HTTPStatus.METHOD_NOT_ALLOWED, {"error": "method not allowed"})
+
     def do_DELETE(self) -> None:
         if not self._origin_allowed():
             self._json(HTTPStatus.FORBIDDEN, {"error": "origin not allowed"})
+            return
+        if self._is_stremio_proxy():
+            self._proxy_stremio()
             return
         parts = self._segments()
         if len(parts) == 3 and parts[:2] == ["v1", "downloads"]:
@@ -385,6 +474,112 @@ class SenseRequestHandler(BaseHTTPRequestHandler):
             self._json(HTTPStatus.OK, {"ok": True})
             return
         self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+
+    def _proxy_stremio(self) -> None:
+        parsed = urllib.parse.urlsplit(self.path)
+        upstream_path = parsed.path[len("/stremio"):] or "/"
+        if not upstream_path.startswith("/"):
+            upstream_path = "/" + upstream_path
+        upstream = urllib.parse.urljoin(self.stremio_server_url, upstream_path.lstrip("/"))
+        if parsed.query:
+            upstream = f"{upstream}?{parsed.query}"
+
+        headers: dict[str, str] = {}
+        for key, value in self.headers.items():
+            if key.lower() in _PROXY_REQUEST_HEADERS:
+                headers[key] = value
+        # Do not forward Origin/Referer. The proxy itself is loopback-only and
+        # intentionally acts as the trusted same-origin bridge for Sense.
+        headers.pop("Origin", None)
+        headers.pop("origin", None)
+        headers.pop("Referer", None)
+        headers.pop("referer", None)
+
+        try:
+            body = self._read_body() if self.command in {"POST", "PUT", "PATCH", "DELETE"} else None
+            request = urllib.request.Request(
+                upstream,
+                data=body if body else None,
+                headers=headers,
+                method=self.command,
+            )
+            try:
+                response = urllib.request.urlopen(request, timeout=30)
+            except urllib.error.HTTPError as exc:
+                response = exc
+
+            with response:
+                status = getattr(response, "status", None) or response.getcode()
+                content_type = response.headers.get("Content-Type", "")
+
+                # Stremio Core treats baseUrl from /settings as the authoritative
+                # engine endpoint when it builds streaming/download deep links.
+                # Rewrite only that small JSON response so every generated media
+                # URL stays on the loopback Sense origin instead of escaping back
+                # to :11470 and reintroducing browser CORS failures.
+                if (
+                    self.command != "HEAD"
+                    and upstream_path.rstrip("/") == "/settings"
+                    and "json" in content_type.lower()
+                ):
+                    raw = response.read()
+                    try:
+                        payload = json.loads(raw.decode("utf-8"))
+                        if isinstance(payload, dict):
+                            payload["baseUrl"] = self._public_stremio_proxy_url()
+                            raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        pass
+
+                    self.send_response(status)
+                    for key, value in response.headers.items():
+                        lower = key.lower()
+                        if lower not in _PROXY_RESPONSE_HEADERS or lower == "content-length":
+                            continue
+                        if lower == "location":
+                            value = self._rewrite_upstream_location(value)
+                        self.send_header(key, value)
+                    self.send_header("Content-Length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                    return
+
+                self.send_response(status)
+                for key, value in response.headers.items():
+                    lower = key.lower()
+                    if lower not in _PROXY_RESPONSE_HEADERS:
+                        continue
+                    if lower == "location":
+                        value = self._rewrite_upstream_location(value)
+                    self.send_header(key, value)
+                self.end_headers()
+
+                if self.command != "HEAD":
+                    while True:
+                        chunk = response.read(CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            self._json(
+                HTTPStatus.BAD_GATEWAY,
+                {
+                    "error": "Stremio streaming server is unavailable",
+                    "upstream": self.stremio_server_url,
+                    "detail": str(exc),
+                },
+            )
+
+    def _public_stremio_proxy_url(self) -> str:
+        host = self.headers.get("Host") or f"{DEFAULT_HOST}:{DEFAULT_PORT}"
+        return f"http://{host}/stremio/"
+
+    def _rewrite_upstream_location(self, value: str) -> str:
+        upstream = self.stremio_server_url.rstrip("/")
+        if value.startswith(upstream):
+            suffix = value[len(upstream):]
+            return "/stremio" + (suffix if suffix.startswith("/") else "/" + suffix)
+        return value
 
     def _serve_ui(self, request_path: str) -> None:
         if not self.web_root.exists():
@@ -394,24 +589,31 @@ class SenseRequestHandler(BaseHTTPRequestHandler):
         if relative in {"/", "/ui", "/ui/"}:
             relative = "index.html"
         else:
-            relative = relative.removeprefix("/ui/")
-        root = self.web_root.resolve()
-        target = (root / relative).resolve()
+            relative = relative.removeprefix("/ui/").lstrip("/")
+
+        target = (self.web_root / relative).resolve()
         try:
-            target.relative_to(root)
+            target.relative_to(self.web_root)
         except ValueError:
             self._json(HTTPStatus.FORBIDDEN, {"error": "invalid path"})
             return
+
         if not target.is_file():
-            target = root / "index.html"
-        if not target.is_file():
-            self._json(HTTPStatus.NOT_FOUND, {"error": "Web UI file not found"})
-            return
-        content_type = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+            # SPA fallback for routes without a file extension.
+            if Path(relative).suffix:
+                self._json(HTTPStatus.NOT_FOUND, {"error": "asset not found"})
+                return
+            target = self.web_root / "index.html"
+            if not target.is_file():
+                self._json(HTTPStatus.NOT_FOUND, {"error": "UI entrypoint not found"})
+                return
+
+        content_type = mimetypes.guess_type(str(target))[0] or "application/octet-stream"
+        size = target.stat().st_size
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(target.stat().st_size))
-        self.send_header("Cache-Control", "no-cache" if target.name == "index.html" else "public, max-age=31536000, immutable")
+        self.send_header("Content-Length", str(size))
+        self.send_header("Cache-Control", "no-cache" if target.name == "index.html" else "public, max-age=3600")
         self.end_headers()
         if self.command != "HEAD":
             with target.open("rb") as stream:
@@ -425,60 +627,70 @@ class SenseRequestHandler(BaseHTTPRequestHandler):
             return
         path = Path(item["filePath"])
         if not path.is_file():
-            self._json(HTTPStatus.NOT_FOUND, {"error": "file missing"})
+            self._json(HTTPStatus.NOT_FOUND, {"error": "download file missing"})
             return
 
-        size = path.stat().st_size
-        start, end = 0, size - 1
-        status = HTTPStatus.OK
+        total = path.stat().st_size
+        start = 0
+        end = total - 1
         range_header = self.headers.get("Range")
+        status = HTTPStatus.OK
         if range_header:
-            match = re.match(r"bytes=(\d*)-(\d*)$", range_header)
+            match = re.fullmatch(r"bytes=(\d*)-(\d*)", range_header.strip())
             if not match:
-                self.send_error(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
-                return
-            start_text, end_text = match.groups()
-            if start_text:
-                start = int(start_text)
-                end = int(end_text) if end_text else end
-            elif end_text:
-                length = int(end_text)
-                start = max(0, size - length)
-            if start >= size or start > end:
                 self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
-                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Range", f"bytes */{total}")
                 self.end_headers()
                 return
-            end = min(end, size - 1)
+            first, last = match.groups()
+            if first:
+                start = int(first)
+                end = int(last) if last else end
+            elif last:
+                suffix = int(last)
+                start = max(total - suffix, 0)
+            if start >= total or end < start:
+                self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+                self.send_header("Content-Range", f"bytes */{total}")
+                self.end_headers()
+                return
+            end = min(end, total - 1)
             status = HTTPStatus.PARTIAL_CONTENT
 
-        length = end - start + 1
+        length = max(end - start + 1, 0)
         self.send_response(status)
-        self._cors()
         self.send_header("Content-Type", mimetypes.guess_type(path.name)[0] or "application/octet-stream")
         self.send_header("Accept-Ranges", "bytes")
         self.send_header("Content-Length", str(length))
         if status == HTTPStatus.PARTIAL_CONTENT:
-            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+            self.send_header("Content-Range", f"bytes {start}-{end}/{total}")
         self.end_headers()
-        if self.command == "HEAD":
-            return
-        with path.open("rb") as stream:
-            stream.seek(start)
-            remaining = length
-            while remaining > 0:
-                chunk = stream.read(min(CHUNK_SIZE, remaining))
-                if not chunk:
-                    break
-                self.wfile.write(chunk)
-                remaining -= len(chunk)
+
+        if self.command != "HEAD":
+            with path.open("rb") as stream:
+                stream.seek(start)
+                remaining = length
+                while remaining > 0:
+                    chunk = stream.read(min(CHUNK_SIZE, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
 
 
-def build_server(host: str, port: int, download_root: Path, web_root: Path, allowed_origins: set[str]) -> ThreadingHTTPServer:
+def build_server(
+    host: str,
+    port: int,
+    download_root: Path,
+    web_root: Path,
+    allowed_origins: set[str],
+    stremio_server_url: str = DEFAULT_STREMIO_SERVER_URL,
+) -> ThreadingHTTPServer:
     server = ThreadingHTTPServer((host, port), SenseRequestHandler)
     server.library = DownloadLibrary(download_root)  # type: ignore[attr-defined]
     server.web_root = web_root.resolve()  # type: ignore[attr-defined]
     server.allowed_origins = allowed_origins  # type: ignore[attr-defined]
+    server.stremio_server_url = stremio_server_url.rstrip("/") + "/"  # type: ignore[attr-defined]
     return server
 
 
@@ -488,20 +700,33 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--download-dir", type=Path, default=default_download_root())
     parser.add_argument("--web-root", type=Path, default=default_web_root())
-    parser.add_argument("--allow-origin", action="append", default=[])
+    parser.add_argument("--stremio-server-url", default=default_stremio_server_url())
+    parser.add_argument(
+        "--allow-origin",
+        action="append",
+        default=[],
+        help="Additional allowed browser origin for the Sense API",
+    )
     args = parser.parse_args()
 
-    allowed = {
-        "http://127.0.0.1:11471",
-        "http://localhost:11471",
+    allowed_origins = {
+        f"http://{args.host}:{args.port}",
+        f"http://localhost:{args.port}",
         "https://web.stremio.com",
-        "http://web.stremio.com",
         *args.allow_origin,
     }
-    server = build_server(args.host, args.port, args.download_dir, args.web_root, allowed)
-    print(f"Stremio Sense {VERSION} listening on http://{args.host}:{args.port}")
-    print(f"Web UI: http://{args.host}:{args.port}/ui/")
-    print(f"Downloads: {server.library.root}")  # type: ignore[attr-defined]
+    server = build_server(
+        args.host,
+        args.port,
+        args.download_dir,
+        args.web_root,
+        allowed_origins,
+        args.stremio_server_url,
+    )
+    print(
+        f"Stremio Sense {VERSION} listening on http://{args.host}:{args.port} "
+        f"(downloads: {server.library.root}, Stremio proxy: {args.stremio_server_url})"
+    )
     try:
         server.serve_forever()
     except KeyboardInterrupt:
