@@ -1,5 +1,14 @@
 // Copyright (C) 2017-2023 Smart code 203358507
 
+// WebView2's native fetch implementation requires the Window receiver. Sense's
+// download manager stores fetch as a callback, which otherwise detaches the
+// method and can throw: "Failed to execute 'fetch' on 'Window': Illegal invocation".
+// Bind it once at startup so callback-style consumers remain compatible with
+// both the Windows shell WebView and normal browsers.
+if (typeof window.fetch === 'function') {
+    window.fetch = window.fetch.bind(window);
+}
+
 if (typeof process.env.SENTRY_DSN === 'string') {
     const Sentry = require('@sentry/browser');
     Sentry.init({ dsn: process.env.SENTRY_DSN });
