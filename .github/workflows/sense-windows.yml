@@ -47,7 +47,7 @@ jobs:
         shell: pwsh
         run: python -m pip install --disable-pip-version-check pytest pyinstaller
 
-      - name: Test native companion
+      - name: Test native companion and Stremio proxy
         shell: pwsh
         run: python -m pytest -q sense-companion/test_agent.py
 
@@ -55,21 +55,39 @@ jobs:
         shell: pwsh
         run: pyinstaller --clean --onefile --name stremio-sense-agent sense-companion/sense_agent.py
 
-      - name: Smoke test exact Windows bundle launch and Stremio discovery
+      - name: Smoke test exact Windows bundle launch, discovery, and proxy URL
         shell: powershell
         run: |
           $stage = Join-Path $env:RUNNER_TEMP 'sense-launch-smoke'
           $fakeStremio = Join-Path $env:RUNNER_TEMP 'fake-stremio-install'
+          $fakeStremioExe = Join-Path $fakeStremio 'stremio.exe'
+          $argsFile = Join-Path $env:RUNNER_TEMP 'sense-stremio-args.txt'
           $registryPath = 'HKCU:\Software\SmartCode\Stremio'
 
           Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue
           Remove-Item -LiteralPath $fakeStremio -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath $argsFile -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           New-Item -ItemType Directory -Force -Path $fakeStremio | Out-Null
 
           Copy-Item 'dist\stremio-sense-agent.exe' (Join-Path $stage 'stremio-sense-agent.exe')
           Copy-Item 'sense-companion\launch-sense.ps1' (Join-Path $stage 'launch-sense.ps1')
-          Copy-Item $env:ComSpec (Join-Path $fakeStremio 'stremio.exe')
+
+          # Make a tiny fake official executable that records exactly what the
+          # launcher passes to it and stays alive long enough for inspection.
+          $fakeSource = @'
+          using System;
+          using System.IO;
+          using System.Threading;
+          public static class Program {
+              public static void Main(string[] args) {
+                  var target = Environment.GetEnvironmentVariable("SENSE_SMOKE_ARGS");
+                  if (!String.IsNullOrWhiteSpace(target)) File.WriteAllLines(target, args);
+                  Thread.Sleep(10000);
+              }
+          }
+          '@
+          Add-Type -TypeDefinition $fakeSource -OutputAssembly $fakeStremioExe -OutputType ConsoleApplication
 
           $registryExisted = Test-Path -LiteralPath $registryPath
           $oldInstallLocation = $null
@@ -83,16 +101,35 @@ jobs:
           New-Item -Path $registryPath -Force | Out-Null
           Set-ItemProperty -LiteralPath $registryPath -Name InstallLocation -Value $fakeStremio
           Get-Process -Name 'stremio-sense-agent' -ErrorAction SilentlyContinue | Stop-Process -Force
+          $env:SENSE_SMOKE_ARGS = $argsFile
 
           try {
-            # Match the real user path: no arguments, agent not pre-started, and
-            # Stremio discovered from the registry written by the official installer.
             & (Join-Path $stage 'launch-sense.ps1')
+
             $health = Invoke-RestMethod -Uri 'http://127.0.0.1:11471/v1/health' -TimeoutSec 2
             if (-not $health.ok) { throw 'Launcher returned but companion health check failed.' }
+            if ($health.stremioProxy -ne '/stremio/') { throw "Companion did not expose the Stremio proxy: $($health.stremioProxy)" }
+
+            $deadline = [DateTime]::UtcNow.AddSeconds(5)
+            while (-not (Test-Path -LiteralPath $argsFile) -and [DateTime]::UtcNow -lt $deadline) {
+              Start-Sleep -Milliseconds 100
+            }
+            if (-not (Test-Path -LiteralPath $argsFile)) { throw 'Fake Stremio did not record launcher arguments.' }
+
+            $encodedProxy = [Uri]::EscapeDataString('http://127.0.0.1:11471/stremio/')
+            $expected = "--webui-url=http://127.0.0.1:11471/ui/#/?streamingServerUrl=$encodedProxy"
+            $actual = Get-Content -LiteralPath $argsFile
+            if ($actual -notcontains $expected) {
+              throw "Expected launcher argument '$expected' but got: $($actual -join ' | ')"
+            }
           }
           finally {
             Get-Process -Name 'stremio-sense-agent' -ErrorAction SilentlyContinue | Stop-Process -Force
+            Get-Process -ErrorAction SilentlyContinue | Where-Object {
+              try { $_.Path -and [string]::Equals($_.Path, $fakeStremioExe, [StringComparison]::OrdinalIgnoreCase) } catch { $false }
+            } | Stop-Process -Force -ErrorAction SilentlyContinue
+            Remove-Item Env:SENSE_SMOKE_ARGS -ErrorAction SilentlyContinue
+
             if ($registryExisted) {
               if ($null -ne $oldInstallLocation) {
                 Set-ItemProperty -LiteralPath $registryPath -Name InstallLocation -Value $oldInstallLocation
